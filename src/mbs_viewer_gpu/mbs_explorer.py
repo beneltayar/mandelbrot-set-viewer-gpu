@@ -226,6 +226,15 @@ class MandelExplorer(QWidget):
         y1, y2 = sorted((y1, y2))
         return QRectF(QPointF(x1, y1), QPointF(x2, y2))
 
+    def keyPressEvent(self, a0: QtGui.QKeyEvent) -> None:
+        if a0.key() == Qt.Key.Key_Escape.value:
+            self.close()
+        if a0.key() == Qt.Key.Key_F11.value:
+            if self.isFullScreen():
+                self.showNormal()
+            else:
+                self.showFullScreen()
+
 
 class OverlayDrawer(QWidget):
     def __init__(self, app: MandelExplorer):
