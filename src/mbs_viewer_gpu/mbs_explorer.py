@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PyQt6 import QtGui
 from PyQt6.QtCore import Qt, QPoint, QRectF, QPointF
-from PyQt6.QtGui import QPixmap, QImage, QPainter
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QSlider
 
 from .big_float.classes import BigFloat, WindowDimension
@@ -50,11 +50,14 @@ class MandelExplorer(QWidget):
         self.mandel_image = np.zeros((self.height(), self.width(), 3), dtype=np.uint8)
         self.num_iterations_slider = QSlider(self)
         self.num_iterations_slider.setRange(MIN_NUM_ITERATIONS, MAX_NUM_ITERATIONS)
+        self.scale_label = QLabel(self)
+        self.scale_label.setFont(QFont('Ariel', pointSize=20))
         self.updating_thread = Thread(target=self.calc_set_continuously, daemon=True)
         self.updating_thread.start()
 
     def resizeEvent(self, a0: QtGui.QResizeEvent) -> None:
         self.num_iterations_slider.setGeometry(30, 30, 30, self.height() - 60)
+        self.scale_label.setGeometry(100, 30, 3000, 100)
 
         with self._on_new_dimension(self.dimension) as new_dimension:
             self.dimensions[-1] = new_dimension
@@ -189,6 +192,7 @@ class MandelExplorer(QWidget):
             new_dimension = new_dimension.re_ratio(self.width() / self.height())
             self.crop_and_zoom_to_new_dimension(new_dimension)
             yield new_dimension
+            self.scale_label.setText(f'Scale: {new_dimension.width().to_num():.3e}')
 
     def wheelEvent(self, a0: QtGui.QWheelEvent) -> None:
         position = a0.position()
