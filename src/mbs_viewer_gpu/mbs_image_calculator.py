@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from numba import cuda
 
@@ -41,10 +43,16 @@ def calc_step(min_: np.ndarray, pixel_size: np.ndarray, val: int, out: np.ndarra
 
 
 @cuda.jit
-def mandel_kernel(min_x: np.ndarray, max_x: np.ndarray, min_y: np.ndarray, max_y: np.ndarray, image: np.ndarray,
-                  iters: int):
+def mandel_kernel(min_x: np.ndarray, max_x: np.ndarray, min_y: np.ndarray, max_y: np.ndarray, image: np.ndarray, iters: int):
     height = image.shape[0]
     width = image.shape[1]
+
+    # noinspection PyUnresolvedReferences
+    start_x = cuda.blockDim.x * cuda.blockIdx.x + cuda.threadIdx.x
+    # noinspection PyUnresolvedReferences
+    start_y = cuda.blockDim.y * cuda.blockIdx.y + cuda.threadIdx.y
+    if start_x >= width or start_y >= height:
+        return
 
     # noinspection PyTypeChecker
     pixel_size_x = cuda.local.array(PRECISION, np.int64)
@@ -55,38 +63,28 @@ def mandel_kernel(min_x: np.ndarray, max_x: np.ndarray, min_y: np.ndarray, max_y
     div_gpu(pixel_size_x, width)
     div_gpu(pixel_size_y, height)
 
-    # noinspection PyUnresolvedReferences
-    start_x = cuda.blockDim.x * cuda.blockIdx.x + cuda.threadIdx.x
-    # noinspection PyUnresolvedReferences
-    start_y = cuda.blockDim.y * cuda.blockIdx.y + cuda.threadIdx.y
-    # noinspection PyUnresolvedReferences
-    grid_x = cuda.gridDim.x * cuda.blockDim.x
-    # noinspection PyUnresolvedReferences
-    grid_y = cuda.gridDim.y * cuda.blockDim.y
-
     # noinspection PyTypeChecker
     real = cuda.local.array(PRECISION, np.int64)
     # noinspection PyTypeChecker
     imag = cuda.local.array(PRECISION, np.int64)
-
-    for x in range(start_x, width, grid_x):
-        calc_step(min_x, pixel_size_x, x, real)
-        for y in range(start_y, height, grid_y):
-            calc_step(min_y, pixel_size_y, y, imag)
-            image[y, x] = mandel(real, imag, iters)
+    calc_step(min_x, pixel_size_x, start_x, real)
+    calc_step(min_y, pixel_size_y, start_y, imag)
+    cuda.syncthreads()
+    image[start_y, start_x] = mandel(real, imag, iters)
 
 
 def get_mandel_image(dimension: WindowDimension, image_height: int = 512, num_iterations: int = 2000):
-    block_dim = (16, 16)
-    grid_dim = (128, 128)
-
     ratio = dimension.ratio()
+    image_width = round(image_height * ratio)
+
+    block_dim = (16, 16)
+    grid_dim = (math.ceil(image_width / block_dim[1]), math.ceil(image_height / block_dim[0]))
 
     x_min = cuda.to_device(dimension.x_min.arr)
     x_max = cuda.to_device(dimension.x_max.arr)
     y_min = cuda.to_device(dimension.y_min.arr)
     y_max = cuda.to_device(dimension.y_max.arr)
 
-    d_image = cuda.device_array((image_height, round(image_height * ratio)), dtype=np.uint32)
+    d_image = cuda.device_array((image_height, image_width), dtype=np.uint32)
     mandel_kernel[grid_dim, block_dim](x_min, x_max, y_min, y_max, d_image, num_iterations)
     return d_image.copy_to_host()
