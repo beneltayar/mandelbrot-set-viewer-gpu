@@ -15,7 +15,7 @@ from PyQt6.QtGui import QPixmap, QImage, QPainter, QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QSlider
 
 from .big_float.classes import BigFloat, WindowDimension
-from .config import MIN_NUM_ITERATIONS, MIN_IMAGE_HEIGHT, GRID_HEIGHT, GRID_WIDTH, MAX_IMAGE_HEIGHT, RESOLUTION_UPSCALE_FACTOR, MAX_NUM_ITERATIONS, STARTING_WINDOW_HEIGHT
+from .config import MIN_NUM_ITERATIONS, MIN_IMAGE_HEIGHT, GRID_HEIGHT, GRID_WIDTH, MAX_IMAGE_HEIGHT, RESOLUTION_UPSCALE_FACTOR, MAX_NUM_ITERATIONS, STARTING_WINDOW_HEIGHT, MAX_NUM_ITERATIONS_PER_COLOR_CYCLE, MIN_NUM_ITERATIONS_PER_COLOR_CYCLE, STARTING_NUM_ITERATIONS_PER_COLOR_CYCLE
 from .mbs_image_calculator import get_mandel_image
 from .utils import colorize_mandel_image
 
@@ -24,6 +24,7 @@ from .utils import colorize_mandel_image
 class ViewConfig:
     dimension: WindowDimension
     num_iterations: int
+    num_iterations_per_color_cycle: int
 
 
 class ViewConfigChange(Exception):
@@ -35,8 +36,11 @@ class MandelExplorer(QWidget):
         super().__init__()
         self.dimension_lock = threading.Lock()
         self.setWindowTitle('Mandelbrot Set Explorer GPU')
+        self.setStyleSheet('QLabel { color: white }'
+                           'QSlider#iterationsSlider { height: 10px; background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #BBFF0000, stop: 1.0 #77000000) }'
+                           'QSlider::handle:vertical { background: white; border: 2px solid black; height: 20px }'
+                           'QSlider::groove:vertical { border: 1px solid white }')
         self.setGeometry(50, 50, round(STARTING_WINDOW_HEIGHT * 1.5), STARTING_WINDOW_HEIGHT)
-
         self.calculated_height: int = 0
         self.dimensions: list[WindowDimension] = [WindowDimension(
             x_min=BigFloat.from_num(-2),
@@ -53,9 +57,13 @@ class MandelExplorer(QWidget):
         self.num_iterations_slider.setRange(MIN_NUM_ITERATIONS, MAX_NUM_ITERATIONS)
         # noinspection PyUnresolvedReferences
         self.num_iterations_slider.valueChanged.connect(self._update_iterations_label)
+        self.num_iterations_slider.setObjectName('iterationsSlider')
+        self.color_frequency_slider = QSlider(self)
+        self.color_frequency_slider.setRange(MIN_NUM_ITERATIONS_PER_COLOR_CYCLE, MAX_NUM_ITERATIONS_PER_COLOR_CYCLE)
+        self.color_frequency_slider.setValue(STARTING_NUM_ITERATIONS_PER_COLOR_CYCLE)
+        # noinspection PyUnresolvedReferences
         self.scale_label = QLabel(self)
         self.scale_label.setFont(QFont('Ariel', pointSize=20))
-        self.scale_label.setStyleSheet('color: white')
         self.quality = 0.
         self.time_stated_calculating = time.monotonic()
         self.calculation_timer = QTimer(self)
@@ -65,13 +73,10 @@ class MandelExplorer(QWidget):
         self.calculation_timer.start()
         self.quality_label = QLabel(self)
         self.quality_label.setFont(QFont('Ariel', pointSize=20))
-        self.quality_label.setStyleSheet('color: white')
         self.timer_label = QLabel(self)
         self.timer_label.setFont(QFont('Ariel', pointSize=20))
-        self.timer_label.setStyleSheet('color: white')
         self.iterations_label = QLabel(self)
         self.iterations_label.setFont(QFont('Ariel', pointSize=20))
-        self.iterations_label.setStyleSheet('color: white')
         self._update_iterations_label()
         self.updating_thread = Thread(target=self.calc_set_continuously, daemon=True)
         self.updating_thread.start()
@@ -85,6 +90,7 @@ class MandelExplorer(QWidget):
 
     def resizeEvent(self, a0: QtGui.QResizeEvent) -> None:
         self.num_iterations_slider.setGeometry(30, 30, 30, self.height() - 60)
+        self.color_frequency_slider.setGeometry(60, 30, 30, self.height() - 60)
         self.scale_label.setGeometry(100, 30, 3000, 100)
         self.quality_label.setGeometry(100, 60, 3000, 100)
         self.timer_label.setGeometry(100, 90, 3000, 100)
@@ -147,7 +153,7 @@ class MandelExplorer(QWidget):
 
     @property
     def view_config(self) -> ViewConfig:
-        return ViewConfig(self.dimension, self.num_iterations_slider.value())
+        return ViewConfig(self.dimension, self.num_iterations_slider.value(), self.color_frequency_slider.value())
 
     def calc_set_continuously(self):
         while True:
@@ -192,7 +198,7 @@ class MandelExplorer(QWidget):
         image_dimension = view_config.dimension.rescaled_by_rect(QRectF(QPointF(grid_x / GRID_WIDTH, grid_y / GRID_HEIGHT),
                                                                         QPointF((grid_x + 1) / GRID_WIDTH, (grid_y + 1) / GRID_HEIGHT)))
         mandel_image = get_mandel_image(image_dimension, image_height=image_height, num_iterations=self.num_iterations_slider.value())
-        colorized_image = colorize_mandel_image(mandel_image)
+        colorized_image = colorize_mandel_image(mandel_image, num_iterations_per_color_cycle=self.color_frequency_slider.value())
         height, width, _ = self.mandel_image.shape
         dest_x_min = int(width * grid_x / GRID_WIDTH)
         dest_x_max = int(width * (grid_x + 1) / GRID_WIDTH)
