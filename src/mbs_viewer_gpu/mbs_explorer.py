@@ -3,13 +3,14 @@ import dataclasses
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import Optional
 
 import cv2
 import numpy as np
 from PyQt6 import QtGui
-from PyQt6.QtCore import Qt, QPoint, QRectF, QPointF
+from PyQt6.QtCore import Qt, QPoint, QRectF, QPointF, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QSlider
 
@@ -50,14 +51,44 @@ class MandelExplorer(QWidget):
         self.mandel_image = np.zeros((self.height(), self.width(), 3), dtype=np.uint8)
         self.num_iterations_slider = QSlider(self)
         self.num_iterations_slider.setRange(MIN_NUM_ITERATIONS, MAX_NUM_ITERATIONS)
+        # noinspection PyUnresolvedReferences
+        self.num_iterations_slider.valueChanged.connect(self._update_iterations_label)
         self.scale_label = QLabel(self)
         self.scale_label.setFont(QFont('Ariel', pointSize=20))
+        self.scale_label.setStyleSheet('color: white')
+        self.quality = 0.
+        self.time_stated_calculating = time.monotonic()
+        self.calculation_timer = QTimer(self)
+        self.calculation_timer.setInterval(100)
+        # noinspection PyUnresolvedReferences
+        self.calculation_timer.timeout.connect(self.update_timer)
+        self.calculation_timer.start()
+        self.quality_label = QLabel(self)
+        self.quality_label.setFont(QFont('Ariel', pointSize=20))
+        self.quality_label.setStyleSheet('color: white')
+        self.timer_label = QLabel(self)
+        self.timer_label.setFont(QFont('Ariel', pointSize=20))
+        self.timer_label.setStyleSheet('color: white')
+        self.iterations_label = QLabel(self)
+        self.iterations_label.setFont(QFont('Ariel', pointSize=20))
+        self.iterations_label.setStyleSheet('color: white')
+        self._update_iterations_label()
         self.updating_thread = Thread(target=self.calc_set_continuously, daemon=True)
         self.updating_thread.start()
+
+    def _update_iterations_label(self):
+        self.iterations_label.setText(f'Iterations: {self.num_iterations_slider.value()}')
+
+    def update_timer(self):
+        if self.quality < 1.:
+            self.timer_label.setText(f'Render Time: {time.monotonic() - self.time_stated_calculating:.2f}s')
 
     def resizeEvent(self, a0: QtGui.QResizeEvent) -> None:
         self.num_iterations_slider.setGeometry(30, 30, 30, self.height() - 60)
         self.scale_label.setGeometry(100, 30, 3000, 100)
+        self.quality_label.setGeometry(100, 60, 3000, 100)
+        self.timer_label.setGeometry(100, 90, 3000, 100)
+        self.iterations_label.setGeometry(100, 120, 3000, 100)
 
         with self._on_new_dimension(self.dimension) as new_dimension:
             self.dimensions[-1] = new_dimension
@@ -120,6 +151,10 @@ class MandelExplorer(QWidget):
 
     def calc_set_continuously(self):
         while True:
+            self.quality = 0.
+            self.time_stated_calculating = time.monotonic()
+            self.quality_label.setText('Quality: 0%')
+            self.timer_label.setText(f'Render Time: 0.00s')
             view_config = self.view_config
             try:
                 self.calc_set_in_increasing_resolution(view_config=view_config)
@@ -136,10 +171,23 @@ class MandelExplorer(QWidget):
 
     def calc_set_cells(self, view_config: ViewConfig, image_height: int):
         cells_coords = [(col, row) for row in range(GRID_HEIGHT) for col in range(GRID_WIDTH)]
-        for cell_coords in sorted(cells_coords, key=lambda coord: (coord[0] - GRID_WIDTH / 2) ** 2 + (coord[1] - GRID_HEIGHT / 2) ** 2):
-            self.calc_set_with_dimension(view_config=view_config, image_height=image_height, image_coord=cell_coords)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(self.calc_set_with_dimension, view_config=view_config, image_height=image_height, image_coord=cell_coords) for cell_coords in sorted(cells_coords, key=lambda coord: (coord[0] - GRID_WIDTH / 2) ** 2 + (coord[1] - GRID_HEIGHT / 2) ** 2)]
+            for future in futures:
+                try:
+                    future.result()
+                    self.quality += (((image_height / MAX_IMAGE_HEIGHT) ** 2) - ((((image_height / RESOLUTION_UPSCALE_FACTOR) / MAX_IMAGE_HEIGHT) ** 2) if image_height != MIN_IMAGE_HEIGHT else 0)) / (GRID_WIDTH * GRID_HEIGHT)
+                    self.quality_label.setText(f'Quality: {round(self.quality * 100)}%')
+                    self.timer_label.setText(f'Render Time: {time.monotonic() - self.time_stated_calculating:.2f}s')
+                except ViewConfigChange:
+                    executor.shutdown(cancel_futures=True)
+                    raise
 
     def calc_set_with_dimension(self, view_config: ViewConfig, image_height: int, image_coord: tuple[int, int]):
+        with self.dimension_lock:
+            if view_config != self.view_config:
+                raise ViewConfigChange
+
         grid_x, grid_y = image_coord
         image_dimension = view_config.dimension.rescaled_by_rect(QRectF(QPointF(grid_x / GRID_WIDTH, grid_y / GRID_HEIGHT),
                                                                         QPointF((grid_x + 1) / GRID_WIDTH, (grid_y + 1) / GRID_HEIGHT)))
