@@ -4,8 +4,8 @@ import numpy as np
 from numba import cuda
 
 from .big_float.classes import WindowDimension
-from .big_float.operations import to_num_gpu, sub_gpu, div_gpu, poly_mul_gpu
-from .config import PRECISION
+from .big_float.operations import to_num_gpu, poly_mul_gpu
+from .config import PRECISION, FACTOR_PER_CELL
 
 
 @cuda.jit(device=True)
@@ -37,9 +37,12 @@ def mandel(real: np.ndarray, imag: np.ndarray, max_iters: int) -> int:
 
 
 @cuda.jit(device=True)
-def calc_step(min_: np.ndarray, pixel_size: np.ndarray, val: int, out: np.ndarray):
-    for i in range(PRECISION):
-        out[i] = min_[i] + pixel_size[i] * val
+def weighted_average(left: np.ndarray, right: np.ndarray, right_weight: int, total_weight: int, out: np.ndarray):
+    leftover = 0
+    for i in range(PRECISION - 1, -1, -1):
+        out[i], leftover = divmod(left[i] * (total_weight - right_weight) + right[i] * right_weight + leftover, total_weight)
+        leftover *= FACTOR_PER_CELL
+    return out
 
 
 @cuda.jit
@@ -48,29 +51,20 @@ def mandel_kernel(min_x: np.ndarray, max_x: np.ndarray, min_y: np.ndarray, max_y
     width = image.shape[1]
 
     # noinspection PyUnresolvedReferences
-    start_x = cuda.blockDim.x * cuda.blockIdx.x + cuda.threadIdx.x
+    pixel_x = cuda.blockDim.x * cuda.blockIdx.x + cuda.threadIdx.x
     # noinspection PyUnresolvedReferences
-    start_y = cuda.blockDim.y * cuda.blockIdx.y + cuda.threadIdx.y
-    if start_x >= width or start_y >= height:
+    pixel_y = cuda.blockDim.y * cuda.blockIdx.y + cuda.threadIdx.y
+    if pixel_x >= width or pixel_y >= height:
         return
-
-    # noinspection PyTypeChecker
-    pixel_size_x = cuda.local.array(PRECISION, np.int64)
-    # noinspection PyTypeChecker
-    pixel_size_y = cuda.local.array(PRECISION, np.int64)
-    sub_gpu(max_x, min_x, pixel_size_x)
-    sub_gpu(max_y, min_y, pixel_size_y)
-    div_gpu(pixel_size_x, width)
-    div_gpu(pixel_size_y, height)
 
     # noinspection PyTypeChecker
     real = cuda.local.array(PRECISION, np.int64)
     # noinspection PyTypeChecker
     imag = cuda.local.array(PRECISION, np.int64)
-    calc_step(min_x, pixel_size_x, start_x, real)
-    calc_step(min_y, pixel_size_y, start_y, imag)
+    weighted_average(min_x, max_x, pixel_x, width, real)
+    weighted_average(min_y, max_y, pixel_y, height, imag)
     cuda.syncthreads()
-    image[start_y, start_x] = mandel(real, imag, iters)
+    image[pixel_y, pixel_x] = mandel(real, imag, iters)
 
 
 def get_mandel_image(dimension: WindowDimension, image_height: int = 512, num_iterations: int = 2000):

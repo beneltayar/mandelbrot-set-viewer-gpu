@@ -76,6 +76,15 @@ def sub_(arr1: np.ndarray, arr2: np.ndarray, out: np.ndarray) -> np.ndarray:
     return out
 
 
+def add_(arr1: np.ndarray, arr2: np.ndarray, out: np.ndarray) -> np.ndarray:
+    leftover = 0
+    for i in range(out.size):
+        leftover, out[i] = divmod(arr1[i] + leftover + arr2[i] + DIVMOD_BUFFER, FACTOR_PER_CELL)
+        out[i] -= DIVMOD_BUFFER
+    assert not leftover
+    return out
+
+
 def div_cpu(arr: np.ndarray, num: int) -> np.ndarray:
     leftover = 0
     for i in range(arr.size - 1, -1, -1):
@@ -85,6 +94,17 @@ def div_cpu(arr: np.ndarray, num: int) -> np.ndarray:
     return arr
 
 
+@cuda.jit(device=True)
+def mul_gpu(arr: np.ndarray, num: int) -> np.ndarray:
+    leftover = 0
+    for i in range(arr.size):
+        leftover, arr[i] = divmod(arr[i] * num + leftover + DIVMOD_BUFFER, FACTOR_PER_CELL)
+        arr[i] -= DIVMOD_BUFFER
+    assert not leftover
+    return arr
+
+
 sub_gpu = cuda.jit(device=True)(sub_)
+add_gpu = cuda.jit(device=True)(add_)
 div_gpu = cuda.jit(device=True)(div_cpu)
 to_num_gpu = cuda.jit(device=True)(to_num_cpu)
